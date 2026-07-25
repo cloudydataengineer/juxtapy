@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from juxtapy import Compare, JoinKeyError, JuxtapyError, MismatchThresholdError
+
+
+def test_perfect_match(backend, make_df):
+    df1 = make_df([(1, 10), (2, 20), (3, 30)], ["id", "v"])
+    df2 = make_df([(1, 10), (2, 20), (3, 30)], ["id", "v"])
+    cmp = Compare(df1, df2, join_columns="id")
+    assert cmp.matches() is True
+    rs = cmp.row_summary()
+    assert rs.only_in_df1 == 0 and rs.only_in_df2 == 0
+    assert all(cs.mismatch_count == 0 for cs in cmp.column_summary())
+
+
+def test_known_mismatch_counts(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    summary = {cs.column: cs for cs in cmp.column_summary()}
+    assert summary["amount"].match_count == 2
+    assert summary["amount"].mismatch_count == 2
+    assert summary["name"].match_count == 3
+    assert summary["name"].mismatch_count == 1
+
+
+def test_rows_only_in_one_table_excluded_from_column_counts(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    rs = cmp.row_summary()
+    assert rs.only_in_df1 == 1
+    assert rs.only_in_df2 == 1
+    total_compared = sum(cs.total_compared for cs in cmp.column_summary())
+    # 4 common rows * 2 compared columns = 8, regardless of the 1 row unique to each side
+    assert total_compared == 8
+
+
+def test_null_handling_parity(backend, make_df):
+    df1 = make_df([(1, None), (2, 5), (3, None)], ["id", "v"])
+    df2 = make_df([(1, None), (2, 5), (3, 9)], ["id", "v"])
+    cmp = Compare(df1, df2, join_columns="id")
+    cs = cmp.column_summary()[0]
+    assert (cs.match_count, cs.mismatch_count) == (2, 1)
+
+
+def test_dtype_mismatch_reported(backend, make_df):
+    df1 = make_df([(1, 10), (2, 20)], ["id", "v"])
+    df2 = make_df([(1, "10"), (2, "20")], ["id", "v"])
+    cmp = Compare(df1, df2, join_columns="id")
+    cs = cmp.column_summary()[0]
+    assert cs.dtype1 != cs.dtype2
+
+
+def test_duplicate_join_keys_warn_not_crash(backend, make_df):
+    df1 = make_df([(1, 10), (1, 11), (2, 20)], ["id", "v"])
+    df2 = make_df([(1, 10), (2, 20)], ["id", "v"])
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.warns(UserWarning, match="Duplicate join keys"):
+        rs = cmp.row_summary()
+    assert rs.duplicate_keys_df1 == 1  # second id=1 row counts as the duplicate
+
+
+def test_ranking_order_worst_first(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    summaries = cmp.column_summary()
+    mismatch_counts = [cs.mismatch_count for cs in summaries]
+    assert mismatch_counts == sorted(mismatch_counts, reverse=True)
+    assert summaries[0].column == "amount"  # 2 mismatches, worse than name's 1
+
+
+def test_sample_mismatches_always_pandas_and_capped(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    sample = cmp.sample_mismatches("amount", n=1)
+    assert isinstance(sample, pd.DataFrame)
+    assert len(sample) == 1
+    assert list(sample.columns) == ["id", "amount_df1", "amount_df2"]
+
+
+def test_empty_dataframes(backend, request):
+    if backend == "pandas":
+        df1 = pd.DataFrame({"id": pd.Series(dtype="int64"), "v": pd.Series(dtype="int64")})
+        df2 = pd.DataFrame({"id": pd.Series(dtype="int64"), "v": pd.Series(dtype="int64")})
+    else:
+        from pyspark.sql.types import LongType, StructField, StructType
+
+        spark = request.getfixturevalue("spark_session")
+        schema = StructType([StructField("id", LongType()), StructField("v", LongType())])
+        df1 = spark.createDataFrame([], schema)
+        df2 = spark.createDataFrame([], schema)
+    cmp = Compare(df1, df2, join_columns="id")
+    rs = cmp.row_summary()
+    assert (rs.rows_df1, rs.rows_df2, rs.common_rows) == (0, 0, 0)
+    assert cmp.matches() is True
+
+
+def test_composite_join_keys(backend, make_df):
+    df1 = make_df([(1, "a", 100), (1, "b", 200)], ["id", "region", "v"])
+    df2 = make_df([(1, "a", 100), (1, "b", 999)], ["id", "region", "v"])
+    cmp = Compare(df1, df2, join_columns=["id", "region"])
+    cs = cmp.column_summary()[0]
+    assert (cs.match_count, cs.mismatch_count) == (1, 1)
+
+
+def test_ignore_columns_filter(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id", ignore_columns=["name"])
+    assert [cs.column for cs in cmp.column_summary()] == ["amount"]
+
+
+def test_columns_to_compare_filter(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id", columns_to_compare=["name"])
+    assert [cs.column for cs in cmp.column_summary()] == ["name"]
+
+
+def test_columns_to_compare_unknown_raises(df_pair):
+    df1, df2 = df_pair
+    with pytest.raises(JuxtapyError):
+        Compare(df1, df2, join_columns="id", columns_to_compare=["nope"])
+
+
+def test_missing_join_column_raises(backend, make_df):
+    df1 = make_df([(1, 10)], ["id", "v"])
+    df2 = make_df([(1, 10)], ["other_id", "v"])
+    with pytest.raises(JoinKeyError):
+        Compare(df1, df2, join_columns="id")
+
+
+@pytest.mark.spark
+def test_mixed_backend_raises(sample_pandas_pair, spark_session):
+    df1, df2 = sample_pandas_pair
+    spark_df2 = spark_session.createDataFrame(df2)
+    with pytest.raises(JuxtapyError):
+        Compare(df1, spark_df2, join_columns="id")
+
+
+def test_unsupported_type_raises():
+    with pytest.raises(JuxtapyError):
+        Compare({"id": [1]}, {"id": [1]}, join_columns="id")
+
+
+def test_schema_diff_added_removed_and_type_changed(backend, make_df):
+    df1 = make_df([(1, 10, "x")], ["id", "shared_int", "only_in_1"])
+    df2 = make_df([(1, "10")], ["id", "shared_int"])
+    cmp = Compare(df1, df2, join_columns="id")
+    sd = cmp.schema_diff()
+    assert sd.only_in_df1 == ["only_in_1"]
+    assert sd.only_in_df2 == []
+    assert "shared_int" in sd.dtype_changes
+    assert sd.has_drift is True
+
+
+def test_assert_match_overall_threshold(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    cmp.assert_match(threshold=0.0)  # never fails
+    with pytest.raises(MismatchThresholdError):
+        cmp.assert_match(threshold=1.0)  # there are mismatches, must fail
+
+
+def test_assert_match_per_column_threshold(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    cmp.assert_match(threshold=0.7, column="name")  # 75% match, passes
+    with pytest.raises(MismatchThresholdError):
+        cmp.assert_match(threshold=0.9, column="name")
+
+
+def test_report_end_to_end(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    report = cmp.report(top_n_columns=1, sample_rows_per_column=1)
+    assert report.row_summary.common_rows == 4
+    assert len(report.column_summary) == 2
+    assert set(report.samples.keys()) == {"amount"}  # only the single worst column sampled
+    text = str(report)
+    assert "Row summary" in text
+    assert "amount" in text
