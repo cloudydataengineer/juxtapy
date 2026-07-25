@@ -54,6 +54,56 @@ cmp = Compare(spark_df1, spark_df2, join_columns=["id"])
 
 **On Databricks**, install with `%pip install juxtapy` (no `[spark]` extra) — Databricks Runtime already bundles a pinned PySpark, and installing a different version via the extra risks a conflict. `Compare` just takes DataFrames you already have (e.g. from `spark.table(...)`).
 
+## Examples
+
+Runnable, self-contained scripts live in [`examples/`](examples/):
+
+- [`01_basic_pandas.py`](examples/01_basic_pandas.py) — single join key, full walkthrough of the API
+- [`02_composite_keys_and_column_selection.py`](examples/02_composite_keys_and_column_selection.py) — multi-column join keys, `columns_to_compare`/`ignore_columns`
+- [`03_ci_threshold_gate.py`](examples/03_ci_threshold_gate.py) — `assert_match` as a pipeline/CI gate
+- [`04_pyspark_databricks.py`](examples/04_pyspark_databricks.py) — the same API against PySpark DataFrames
+
+## API Reference
+
+### `Compare(df1, df2, join_columns, df1_name="df1", df2_name="df2", columns_to_compare=None, ignore_columns=None, cast_column_names_lower=True)`
+
+Joins `df1` and `df2` on `join_columns` and prepares the comparison. Both dataframes must be the same backend (pandas or PySpark). Raises `JuxtapyError` if backends differ, `JoinKeyError` if a join column is missing from either side.
+
+- `join_columns` — a single column name or a list, for composite keys.
+- `columns_to_compare` — restrict comparison to these shared, non-key columns (raises `JuxtapyError` if any aren't shared columns). Defaults to *all* shared, non-key columns.
+- `ignore_columns` — compare every shared column except these.
+- `cast_column_names_lower` — lowercases column names (and `join_columns`) on both sides before comparing, so case differences in headers don't cause spurious "only on one side" columns. Default `True`.
+
+**Methods** (results are cached after first call):
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `row_summary()` | `RowSummary` | Row counts: total per side, common, only-in-df1/df2, duplicate join keys. Warns if duplicate keys are found. |
+| `column_summary()` | `list[ColumnSummary]` | Per-column match/mismatch counts and dtypes, sorted worst-mismatch-first. |
+| `schema_diff()` | `SchemaDiff` | Columns only on one side, and columns present on both sides with a changed dtype. |
+| `sample_mismatches(column, n=5)` | `pandas.DataFrame` | Join key(s) + both values, for up to `n` of the actual mismatched rows for `column`. Always a pandas DataFrame, even for PySpark inputs. Raises `JuxtapyError` if `column` wasn't compared. |
+| `matches(ignore_extra_columns=False)` | `bool` | `True` if every compared column fully agrees (and, unless `ignore_extra_columns=True`, rows match on both sides too). |
+| `assert_match(threshold=1.0, column=None)` | `None` | Raises `MismatchThresholdError` if the match rate (overall, or for `column` if given) falls below `threshold`. Designed for CI gating. |
+| `report(top_n_columns=5, sample_rows_per_column=5)` | `CompareReport` | Everything above bundled into one object — the worst `top_n_columns` mismatched columns each get up to `sample_rows_per_column` sample rows. |
+
+### `compare(df1, df2, join_columns, **kwargs)`
+
+Functional shortcut: `Compare(df1, df2, join_columns, **kwargs).report()`.
+
+### Result types (`juxtapy.results`)
+
+- **`RowSummary`** — `rows_df1`, `rows_df2`, `common_rows`, `only_in_df1`, `only_in_df2`, `duplicate_keys_df1`, `duplicate_keys_df2`, plus `.all_rows_match` (bool property).
+- **`ColumnSummary`** — `column`, `match_count`, `mismatch_count`, `dtype1`, `dtype2`, plus `.total_compared`, `.match_pct`, `.mismatch_pct` (properties).
+- **`SchemaDiff`** — `only_in_df1`, `only_in_df2`, `dtype_changes` (`{column: (dtype1, dtype2)}`), plus `.has_drift` (bool property).
+- **`CompareReport`** — `df1_name`, `df2_name`, `join_columns`, `row_summary`, `column_summary`, `schema_diff`, `samples` (`{column: DataFrame}`). `str(report)` renders a plain-text report; `report.to_html()` / `report._repr_html_()` render an HTML table (auto-used by Jupyter/Databricks); `report.to_dict()` returns a plain dict (samples excluded) for logging/JSON.
+
+### Exceptions (`juxtapy.exceptions`)
+
+- **`JuxtapyError`** — base exception for all juxtapy errors.
+- **`JoinKeyError`** — a join column is missing from one or both tables.
+- **`SchemaError`** — the two tables' schemas are incompatible for comparison.
+- **`MismatchThresholdError`** — raised by `assert_match`; carries `.match_rate`, `.threshold`, and `.column` (`None` if the check was overall rather than per-column).
+
 ## Development
 
 ```bash
