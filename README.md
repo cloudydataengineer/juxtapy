@@ -62,6 +62,7 @@ Runnable, self-contained scripts live in [`examples/`](examples/):
 - [`02_composite_keys_and_column_selection.py`](examples/02_composite_keys_and_column_selection.py) — multi-column join keys, `columns_to_compare`/`ignore_columns`
 - [`03_ci_threshold_gate.py`](examples/03_ci_threshold_gate.py) — `assert_match` as a pipeline/CI gate
 - [`04_pyspark_databricks.py`](examples/04_pyspark_databricks.py) — the same API against PySpark DataFrames
+- [`05_databricks_full_demo.py`](examples/05_databricks_full_demo.py) — every public function/class in one notebook, importable directly into Databricks
 
 ## API Reference
 
