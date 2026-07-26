@@ -1,6 +1,6 @@
 [project]
 name = "juxtapy"
-version = "0.2.0"
+version = "0.3.0"
 description = "Row-by-row, column-by-column comparison of pandas/PySpark tables, ranked by mismatch."
 readme = "README.md"
 license = "MIT"

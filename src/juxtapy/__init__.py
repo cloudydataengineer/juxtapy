@@ -7,7 +7,7 @@ from juxtapy.exceptions import (
 )
 from juxtapy.results import ColumnSummary, CompareReport, RowSummary, SchemaDiff
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "ColumnSummary",
