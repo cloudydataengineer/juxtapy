@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 import warnings
 from collections.abc import Sequence
 from typing import Any
@@ -160,36 +161,73 @@ class Compare:
             return False
         return all(cs.mismatch_count == 0 for cs in self.column_summary())
 
-    def assert_match(self, threshold: float = 1.0, column: str | None = None) -> None:
-        """Raise MismatchThresholdError if the match rate falls below ``threshold``.
+    def assert_match(
+        self,
+        threshold: float | None = 1.0,
+        column: str | Sequence[str] | None = None,
+    ) -> None:
+        """Raise MismatchThresholdError if a match rate falls below ``threshold``.
 
-        Checks a single column's match rate if ``column`` is given, otherwise the
-        overall match rate across all compared columns.
+        ``column`` may be a single column name, a list of column names, or ``None``.
+        With a list, every named column is checked and *all* failing columns are
+        reported in a single raised error (via ``exc.failures``), not just the first.
+
+        ``threshold`` defaults to ``1.0`` (exact match required), matching ``column=None``
+        for the pooled rate across all compared columns' cells, or a single column's
+        own rate. Pass ``threshold=None`` explicitly to auto-derive the bar instead, as
+        ``mean(rates) - 2 * pstdev(rates)`` across the checked columns' match rates
+        (all compared columns, if ``column`` is also ``None``) — this flags columns whose
+        match rate is a statistical outlier relative to the others being checked. With a
+        single checked column, the population stdev is 0, so that column always passes.
+
+        Raises JuxtapyError if any named column isn't a compared column.
         """
-        if column is not None:
-            cs = next((c for c in self.column_summary() if c.column == column), None)
-            if cs is None:
-                raise JuxtapyError(f"'{column}' is not a compared column.")
-            rate = cs.match_pct / 100.0
+        if column is None and threshold is not None:
+            summaries = self.column_summary()
+            total_match = sum(c.match_count for c in summaries)
+            total_compared = sum(c.total_compared for c in summaries)
+            rate = 1.0 if total_compared == 0 else total_match / total_compared
             if rate < threshold:
                 raise MismatchThresholdError(
-                    f"Column '{column}' match rate {rate:.4f} is below threshold {threshold:.4f}",
-                    match_rate=rate,
+                    f"Overall match rate {rate:.4f} is below threshold {threshold:.4f}",
                     threshold=threshold,
-                    column=column,
+                    failures=[(None, rate)],
                 )
             return
 
-        summaries = self.column_summary()
-        total_match = sum(c.match_count for c in summaries)
-        total_compared = sum(c.total_compared for c in summaries)
-        rate = 1.0 if total_compared == 0 else total_match / total_compared
-        if rate < threshold:
+        columns = [column] if isinstance(column, str) else column
+        by_name = {cs.column: cs for cs in self.column_summary()}
+        if columns is None:
+            columns = list(by_name)
+        else:
+            columns = list(columns)
+            unknown = [c for c in columns if c not in by_name]
+            if unknown:
+                raise JuxtapyError(f"Not a compared column(s): {unknown}")
+
+        if not columns:
+            return
+
+        rates = {c: by_name[c].match_pct / 100.0 for c in columns}
+
+        if threshold is None:
+            values = list(rates.values())
+            mean = statistics.mean(values)
+            stdev = statistics.pstdev(values)
+            effective_threshold = mean - 2 * stdev
+            threshold_note = f" (auto: mean={mean:.4f}, stdev={stdev:.4f})"
+        else:
+            effective_threshold = threshold
+            threshold_note = ""
+
+        failures = [(c, r) for c, r in rates.items() if r < effective_threshold]
+        if failures:
+            lines = "\n".join(f"  {c}: match_rate={r:.4f}" for c, r in failures)
             raise MismatchThresholdError(
-                f"Overall match rate {rate:.4f} is below threshold {threshold:.4f}",
-                match_rate=rate,
-                threshold=threshold,
-                column=None,
+                f"{len(failures)} column(s) below threshold "
+                f"{effective_threshold:.4f}{threshold_note}:\n{lines}",
+                threshold=effective_threshold,
+                failures=failures,
             )
 
     def report(self, top_n_columns: int = 5, sample_rows_per_column: int = 5) -> CompareReport:

@@ -83,7 +83,7 @@ Joins `df1` and `df2` on `join_columns` and prepares the comparison. Both datafr
 | `schema_diff()` | `SchemaDiff` | Columns only on one side, and columns present on both sides with a changed dtype. |
 | `sample_mismatches(column, n=5)` | `pandas.DataFrame` | Join key(s) + both values, for up to `n` of the actual mismatched rows for `column`. Always a pandas DataFrame, even for PySpark inputs. Raises `JuxtapyError` if `column` wasn't compared. |
 | `matches(ignore_extra_columns=False)` | `bool` | `True` if every compared column fully agrees (and, unless `ignore_extra_columns=True`, rows match on both sides too). |
-| `assert_match(threshold=1.0, column=None)` | `None` | Raises `MismatchThresholdError` if the match rate (overall, or for `column` if given) falls below `threshold`. Designed for CI gating. |
+| `assert_match(threshold=1.0, column=None)` | `None` | Raises `MismatchThresholdError` if a match rate falls below `threshold`. `column` may be a single column name, a **list** of column names, or `None` (overall/all-columns). With a list, every named column is checked and *all* failing columns are reported in one error, not just the first. Pass `threshold=None` explicitly to auto-derive the bar instead, as `mean(rates) - 2 * pstdev(rates)` across the checked columns — flags columns whose match rate is a statistical outlier relative to the others being checked (with a single checked column, this always passes, since stdev of one value is 0). Designed for CI gating. |
 | `report(top_n_columns=5, sample_rows_per_column=5)` | `CompareReport` | Everything above bundled into one object — the worst `top_n_columns` mismatched columns each get up to `sample_rows_per_column` sample rows. |
 
 ### `compare(df1, df2, join_columns, **kwargs)`
@@ -102,7 +102,7 @@ Functional shortcut: `Compare(df1, df2, join_columns, **kwargs).report()`.
 - **`JuxtapyError`** — base exception for all juxtapy errors.
 - **`JoinKeyError`** — a join column is missing from one or both tables.
 - **`SchemaError`** — the two tables' schemas are incompatible for comparison.
-- **`MismatchThresholdError`** — raised by `assert_match`; carries `.match_rate`, `.threshold`, and `.column` (`None` if the check was overall rather than per-column).
+- **`MismatchThresholdError`** — raised by `assert_match`; carries `.threshold` (the applied bar, auto-derived or explicit) and `.failures` (a list of `(column, match_rate)` pairs for every check that fell short — `column` is `None` for the overall/pooled check). `.column` and `.match_rate` are populated as a convenience only when there was exactly one failure; for multiple failing columns, use `.failures`.
 
 ## Development
 

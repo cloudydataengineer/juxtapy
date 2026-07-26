@@ -170,6 +170,77 @@ def test_assert_match_per_column_threshold(df_pair):
         cmp.assert_match(threshold=0.9, column="name")
 
 
+def test_assert_match_column_list_all_pass(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    cmp.assert_match(threshold=0.4, column=["amount", "name"])  # 50% and 75%, both pass
+
+
+def test_assert_match_column_list_one_fails(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.raises(MismatchThresholdError) as exc_info:
+        # amount=50% fails, name=75% passes
+        cmp.assert_match(threshold=0.6, column=["amount", "name"])
+    assert exc_info.value.failures == [("amount", pytest.approx(0.5))]
+    assert exc_info.value.column == "amount"  # convenience attr, single failure
+    assert exc_info.value.match_rate == pytest.approx(0.5)
+
+
+def test_assert_match_column_list_multiple_failures_collected(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.raises(MismatchThresholdError) as exc_info:
+        cmp.assert_match(threshold=0.99, column=["amount", "name"])  # both fail
+    failures = exc_info.value.failures
+    assert [c for c, _ in failures] == ["amount", "name"]
+    assert exc_info.value.column is None  # ambiguous with >1 failure
+    assert exc_info.value.match_rate is None
+
+
+def test_assert_match_unknown_column_in_list_raises(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.raises(JuxtapyError):
+        cmp.assert_match(threshold=0.5, column=["amount", "nope"])
+
+
+def _pandas_frames_with_rates(rates: dict, n: int = 10):
+    """(df1, df2) with an 'id' key and one column per rate, each column matching
+    in exactly round(rate * n) of n rows."""
+    ids = list(range(n))
+    df1 = pd.DataFrame({"id": ids})
+    df2 = pd.DataFrame({"id": ids})
+    for col, rate in rates.items():
+        match_count = round(rate * n)
+        df1[col] = ids
+        df2[col] = [ids[i] if i < match_count else -1 for i in range(n)]
+    return df1, df2
+
+
+def test_assert_match_auto_threshold_flags_outlier():
+    rates = {f"good{i}": 1.0 for i in range(9)}
+    rates["bad"] = 0.0
+    df1, df2 = _pandas_frames_with_rates(rates)
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.raises(MismatchThresholdError) as exc_info:
+        cmp.assert_match(threshold=None, column=list(rates))
+    assert [c for c, _ in exc_info.value.failures] == ["bad"]
+
+
+def test_assert_match_auto_threshold_all_similar_passes():
+    rates = {"a": 1.0, "b": 0.9, "c": 1.0}
+    df1, df2 = _pandas_frames_with_rates(rates)
+    cmp = Compare(df1, df2, join_columns="id")
+    cmp.assert_match(threshold=None, column=list(rates))  # no outlier -> no raise
+
+
+def test_assert_match_auto_threshold_single_column_always_passes():
+    df1, df2 = _pandas_frames_with_rates({"a": 0.5})
+    cmp = Compare(df1, df2, join_columns="id")
+    cmp.assert_match(threshold=None, column="a")  # pstdev of 1 value is 0 -> never fails
+
+
 def test_report_end_to_end(df_pair):
     df1, df2 = df_pair
     cmp = Compare(df1, df2, join_columns="id")
