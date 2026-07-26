@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
@@ -15,6 +15,22 @@ def _validate_keys(df: pd.DataFrame, keys: Sequence[str]) -> None:
     missing = [k for k in keys if k not in df.columns]
     if missing:
         raise JoinKeyError(f"Join column(s) not found in dataframe: {missing}")
+
+
+def _is_numeric(s: pd.Series) -> bool:
+    return pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+
+
+def _match_mask(
+    left: pd.Series, right: pd.Series, abs_tol: float, rel_tol: float
+) -> pd.Series:
+    both_null = left.isna() & right.isna()
+    match = (left == right) | both_null
+    if (abs_tol or rel_tol) and _is_numeric(left) and _is_numeric(right):
+        diff = (left - right).abs()
+        bound = abs_tol + rel_tol * pd.concat([left.abs(), right.abs()], axis=1).max(axis=1)
+        match = match | (diff <= bound)
+    return match
 
 
 class PandasAdapter:
@@ -75,25 +91,35 @@ class PandasJoinedAdapter:
     def _both_rows(self) -> pd.DataFrame:
         return self._merged[self._merged[_INDICATOR_COL] == "both"]
 
-    def compare_columns(self, columns: Sequence[str]) -> dict[str, tuple[int, int]]:
+    def compare_columns(
+        self,
+        columns: Sequence[str],
+        tolerances: Mapping[str, tuple[float, float]] | None = None,
+    ) -> dict[str, tuple[int, int]]:
+        tolerances = tolerances or {}
         both = self._both_rows()
         results: dict[str, tuple[int, int]] = {}
         for column in columns:
             left, right = self._column_pair(column)
-            left_values, right_values = both[left], both[right]
-            both_null = left_values.isna() & right_values.isna()
-            match = (left_values == right_values) | both_null
+            abs_tol, rel_tol = tolerances.get(column, (0.0, 0.0))
+            match = _match_mask(both[left], both[right], abs_tol, rel_tol)
             match_count = int(match.sum())
             mismatch_count = int((~match).sum())
             results[column] = (match_count, mismatch_count)
         return results
 
-    def sample_mismatched_rows(self, column: str, keys: Sequence[str], n: int) -> pd.DataFrame:
+    def sample_mismatched_rows(
+        self,
+        column: str,
+        keys: Sequence[str],
+        n: int,
+        abs_tol: float = 0.0,
+        rel_tol: float = 0.0,
+    ) -> pd.DataFrame:
         both = self._both_rows()
         left, right = self._column_pair(column)
         left_values, right_values = both[left], both[right]
-        both_null = left_values.isna() & right_values.isna()
-        mismatch_mask = ~((left_values == right_values) | both_null)
+        mismatch_mask = ~_match_mask(left_values, right_values, abs_tol, rel_tol)
         sample = both.loc[mismatch_mask, list(keys) + [left, right]].head(n).copy()
         sample = sample.rename(columns={left: f"{column}_df1", right: f"{column}_df2"})
         return sample.reset_index(drop=True)

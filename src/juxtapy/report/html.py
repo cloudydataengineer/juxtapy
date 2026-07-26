@@ -36,6 +36,8 @@ def render_html(report: CompareReport) -> str:
     parts = [_STYLE, '<div class="juxtapy-report">']
     parts.append(f"<h3>juxtapy comparison: {_esc(report.df1_name)} vs {_esc(report.df2_name)}</h3>")
     parts.append(f"<p>Join column(s): {_esc(', '.join(report.join_columns))}</p>")
+    if report.tolerance_note:
+        parts.append(f"<p>Tolerance: {_esc(report.tolerance_note)}</p>")
 
     rs = report.row_summary
     parts.append("<h4>Row summary</h4>")

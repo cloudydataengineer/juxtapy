@@ -63,6 +63,7 @@ class CompareReport:
     column_summary: list[ColumnSummary]
     schema_diff: SchemaDiff
     samples: dict[str, pd.DataFrame] = field(default_factory=dict)
+    tolerance_note: str | None = None
 
     def __str__(self) -> str:
         from juxtapy.report.text import render_text
@@ -85,4 +86,5 @@ class CompareReport:
             "row_summary": vars(self.row_summary),
             "column_summary": [vars(cs) for cs in self.column_summary],
             "schema_diff": vars(self.schema_diff),
+            "tolerance": self.tolerance_note,
         }

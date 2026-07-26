@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
@@ -32,8 +32,23 @@ class JoinedAdapter(Protocol):
 
     def common_count(self) -> int: ...
 
-    def compare_columns(self, columns: Sequence[str]) -> dict[str, tuple[int, int]]:
-        """Return {column: (match_count, mismatch_count)} for all given columns in one pass."""
+    def compare_columns(
+        self,
+        columns: Sequence[str],
+        tolerances: Mapping[str, tuple[float, float]] | None = None,
+    ) -> dict[str, tuple[int, int]]:
+        """Return {column: (match_count, mismatch_count)} for all given columns in one pass.
+
+        ``tolerances`` maps column -> (abs_tol, rel_tol); columns not present use (0.0, 0.0)
+        (exact equality). Tolerance only applies where both sides are numeric.
+        """
         ...
 
-    def sample_mismatched_rows(self, column: str, keys: Sequence[str], n: int) -> pd.DataFrame: ...
+    def sample_mismatched_rows(
+        self,
+        column: str,
+        keys: Sequence[str],
+        n: int,
+        abs_tol: float = 0.0,
+        rel_tol: float = 0.0,
+    ) -> pd.DataFrame: ...

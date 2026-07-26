@@ -14,6 +14,7 @@ Most table-diffing tools hand you either a full row-level diff or a flat report.
 - **Ranked, not just reported.** `column_summary()` sorts columns worst-mismatch-first, so the columns most likely to matter are first, not buried in an alphabetical or column-order list.
 - **Drill-down is first-class.** `sample_mismatches("amount")` returns the key + both values for the actual disagreeing rows — the thing you need to root-cause *why* two tables disagree, not just *that* they do.
 - **CI-ready.** `assert_match(threshold=0.99)` raises if the match rate drops below a bar, so a comparison can gate a pipeline or CI job directly.
+- **Numeric tolerance built in.** `abs_tol`/`rel_tol` (global or per-column) let floating-point noise — a cast, a rounding difference — match instead of showing up as a false-positive mismatch.
 - **Schema drift is explicit.** Columns only on one side, or with a changed dtype, show up in the report rather than being silently dropped.
 - **Notebook-friendly.** `CompareReport` renders as a color-highlighted HTML table automatically in Jupyter/Databricks.
 - **Same API for pandas and PySpark.** Pass either kind of dataframe; PySpark is an optional extra, not a hard dependency.
@@ -63,10 +64,11 @@ Runnable, self-contained scripts live in [`examples/`](examples/):
 - [`03_ci_threshold_gate.py`](examples/03_ci_threshold_gate.py) — `assert_match` as a pipeline/CI gate
 - [`04_pyspark_databricks.py`](examples/04_pyspark_databricks.py) — the same API against PySpark DataFrames
 - [`05_databricks_full_demo.py`](examples/05_databricks_full_demo.py) — every public function/class in one notebook, importable directly into Databricks
+- [`06_numeric_tolerance.py`](examples/06_numeric_tolerance.py) — `abs_tol`/`rel_tol` and per-column `tolerances` for floating-point noise
 
 ## API Reference
 
-### `Compare(df1, df2, join_columns, df1_name="df1", df2_name="df2", columns_to_compare=None, ignore_columns=None, cast_column_names_lower=True)`
+### `Compare(df1, df2, join_columns, df1_name="df1", df2_name="df2", columns_to_compare=None, ignore_columns=None, cast_column_names_lower=True, abs_tol=0.0, rel_tol=0.0, tolerances=None)`
 
 Joins `df1` and `df2` on `join_columns` and prepares the comparison. Both dataframes must be the same backend (pandas or PySpark). Raises `JuxtapyError` if backends differ, `JoinKeyError` if a join column is missing from either side.
 
@@ -74,6 +76,8 @@ Joins `df1` and `df2` on `join_columns` and prepares the comparison. Both datafr
 - `columns_to_compare` — restrict comparison to these shared, non-key columns (raises `JuxtapyError` if any aren't shared columns). Defaults to *all* shared, non-key columns.
 - `ignore_columns` — compare every shared column except these.
 - `cast_column_names_lower` — lowercases column names (and `join_columns`) on both sides before comparing, so case differences in headers don't cause spurious "only on one side" columns. Default `True`.
+- `abs_tol` / `rel_tol` — by default a "match" requires exact equality. Setting these lets **numeric** columns (numeric on both sides — non-numeric columns always require exact equality) match within `abs_tol + rel_tol * max(|df1_val|, |df2_val|)`. This is symmetric (`math.isclose()`-style) — swapping `df1`/`df2` gives the same result. Both default to `0.0`, so the default behavior is unchanged. Raises `JuxtapyError` if either is negative.
+- `tolerances` — a `{column: (abs_tol, rel_tol)}` dict overriding the global `abs_tol`/`rel_tol` for specific columns (e.g. a tighter bound on `price` than the rest). Raises `JuxtapyError` for an unknown column or a negative value.
 
 **Methods** (results are cached after first call):
 
@@ -96,7 +100,7 @@ Functional shortcut: `Compare(df1, df2, join_columns, **kwargs).report()`.
 - **`RowSummary`** — `rows_df1`, `rows_df2`, `common_rows`, `only_in_df1`, `only_in_df2`, `duplicate_keys_df1`, `duplicate_keys_df2`, plus `.all_rows_match` (bool property).
 - **`ColumnSummary`** — `column`, `match_count`, `mismatch_count`, `dtype1`, `dtype2`, plus `.total_compared`, `.match_pct`, `.mismatch_pct` (properties).
 - **`SchemaDiff`** — `only_in_df1`, `only_in_df2`, `dtype_changes` (`{column: (dtype1, dtype2)}`), plus `.has_drift` (bool property).
-- **`CompareReport`** — `df1_name`, `df2_name`, `join_columns`, `row_summary`, `column_summary`, `schema_diff`, `samples` (`{column: DataFrame}`). `str(report)` renders a plain-text report; `report.to_html()` / `report._repr_html_()` render an HTML table (auto-used by Jupyter/Databricks); `report.to_dict()` returns a plain dict (samples excluded) for logging/JSON.
+- **`CompareReport`** — `df1_name`, `df2_name`, `join_columns`, `row_summary`, `column_summary`, `schema_diff`, `samples` (`{column: DataFrame}`), `tolerance_note` (a human-readable summary of `abs_tol`/`rel_tol`/`tolerances`, or `None` if none were set). `str(report)` renders a plain-text report; `report.to_html()` / `report._repr_html_()` render an HTML table (auto-used by Jupyter/Databricks); `report.to_dict()` returns a plain dict (samples excluded) for logging/JSON.
 
 ### Exceptions (`juxtapy.exceptions`)
 

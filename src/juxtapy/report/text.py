@@ -10,6 +10,8 @@ def render_text(report: CompareReport) -> str:
     lines = []
     lines.append(f"juxtapy comparison: {report.df1_name} vs {report.df2_name}")
     lines.append(f"Join column(s): {', '.join(report.join_columns)}")
+    if report.tolerance_note:
+        lines.append(f"Tolerance: {report.tolerance_note}")
     lines.append("")
 
     rs = report.row_summary

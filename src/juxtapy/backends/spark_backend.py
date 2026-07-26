@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import pandas as pd
+from pyspark.sql import Column as SparkColumn
 from pyspark.sql import DataFrame as SparkDataFrame
 from pyspark.sql import functions as F
+from pyspark.sql.types import NumericType
 
 from juxtapy.exceptions import JoinKeyError
 
@@ -94,18 +96,39 @@ class SparkJoinedAdapter:
     def common_count(self) -> int:
         return self._row_class_counts().get("both", 0)
 
-    def compare_columns(self, columns: Sequence[str]) -> dict[str, tuple[int, int]]:
+    def _match_expr(
+        self, left_name: str, right_name: str, abs_tol: float, rel_tol: float
+    ) -> SparkColumn:
+        left, right = F.col(left_name), F.col(right_name)
+        match = left.eqNullSafe(right)
+        if abs_tol or rel_tol:
+            left_type = self._joined.schema[left_name].dataType
+            right_type = self._joined.schema[right_name].dataType
+            if isinstance(left_type, NumericType) and isinstance(right_type, NumericType):
+                bound = F.lit(float(abs_tol)) + F.lit(float(rel_tol)) * F.greatest(
+                    F.abs(left), F.abs(right)
+                )
+                close = F.abs(left - right) <= bound
+                match = match | (left.isNotNull() & right.isNotNull() & close)
+        return match
+
+    def compare_columns(
+        self,
+        columns: Sequence[str],
+        tolerances: Mapping[str, tuple[float, float]] | None = None,
+    ) -> dict[str, tuple[int, int]]:
         columns = list(columns)
         if not columns:
             return {}
+        tolerances = tolerances or {}
         both = self._joined.filter(F.col(_ROW_CLASS_COL) == "both")
         agg_exprs = [F.count(F.lit(1)).alias("__total")]
         for column in columns:
-            left_col = F.col(f"{column}{_LEFT_SUFFIX}")
-            right_col = F.col(f"{column}{_RIGHT_SUFFIX}")
-            agg_exprs.append(
-                F.sum(left_col.eqNullSafe(right_col).cast("long")).alias(f"__match__{column}")
+            abs_tol, rel_tol = tolerances.get(column, (0.0, 0.0))
+            match_expr = self._match_expr(
+                f"{column}{_LEFT_SUFFIX}", f"{column}{_RIGHT_SUFFIX}", abs_tol, rel_tol
             )
+            agg_exprs.append(F.sum(match_expr.cast("long")).alias(f"__match__{column}"))
         row = both.agg(*agg_exprs).collect()[0]
         total = row["__total"] or 0
         results: dict[str, tuple[int, int]] = {}
@@ -114,13 +137,23 @@ class SparkJoinedAdapter:
             results[column] = (match_count, total - match_count)
         return results
 
-    def sample_mismatched_rows(self, column: str, keys: Sequence[str], n: int) -> pd.DataFrame:
+    def sample_mismatched_rows(
+        self,
+        column: str,
+        keys: Sequence[str],
+        n: int,
+        abs_tol: float = 0.0,
+        rel_tol: float = 0.0,
+    ) -> pd.DataFrame:
         left_col = F.col(f"{column}{_LEFT_SUFFIX}")
         right_col = F.col(f"{column}{_RIGHT_SUFFIX}")
+        match_expr = self._match_expr(
+            f"{column}{_LEFT_SUFFIX}", f"{column}{_RIGHT_SUFFIX}", abs_tol, rel_tol
+        )
         key_cols = [F.col(f"{k}{_LEFT_SUFFIX}").alias(k) for k in keys]
         mismatched = (
             self._joined.filter(F.col(_ROW_CLASS_COL) == "both")
-            .filter(~left_col.eqNullSafe(right_col))
+            .filter(~match_expr)
             .select(*key_cols, left_col.alias(f"{column}_df1"), right_col.alias(f"{column}_df2"))
             .limit(n)
         )

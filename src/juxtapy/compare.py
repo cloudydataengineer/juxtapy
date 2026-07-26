@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import statistics
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
@@ -26,6 +26,13 @@ class Compare:
 
     Works with either pandas DataFrames or PySpark DataFrames (both inputs
     must use the same backend).
+
+    By default, a "match" requires exact equality. ``abs_tol``/``rel_tol`` allow
+    numeric columns (on both sides) to match within a bound of
+    ``abs_tol + rel_tol * max(|df1_val|, |df2_val|)`` — symmetric, so swapping
+    df1/df2 gives the same result. ``tolerances={"column": (abs_tol, rel_tol)}``
+    overrides the global bar for specific columns. Non-numeric columns always
+    require exact equality, regardless of tolerance settings.
     """
 
     def __init__(
@@ -38,6 +45,9 @@ class Compare:
         columns_to_compare: Sequence[str] | None = None,
         ignore_columns: Sequence[str] | None = None,
         cast_column_names_lower: bool = True,
+        abs_tol: float = 0.0,
+        rel_tol: float = 0.0,
+        tolerances: Mapping[str, tuple[float, float]] | None = None,
     ) -> None:
         backend1 = infer_backend(df1)
         backend2 = infer_backend(df2)
@@ -88,6 +98,22 @@ class Compare:
         self._only_in_df1_cols = sorted(cols1 - cols2 - join_set)
         self._only_in_df2_cols = sorted(cols2 - cols1 - join_set)
 
+        if abs_tol < 0 or rel_tol < 0:
+            raise JuxtapyError(f"abs_tol/rel_tol must be >= 0, got abs_tol={abs_tol}, rel_tol={rel_tol}")
+        if tolerances:
+            unknown_tol_cols = set(tolerances) - set(shared)
+            if unknown_tol_cols:
+                raise JuxtapyError(f"tolerances key(s) not a compared column: {sorted(unknown_tol_cols)}")
+            for col, (a, r) in tolerances.items():
+                if a < 0 or r < 0:
+                    raise JuxtapyError(f"tolerances[{col!r}] must be >= 0, got abs_tol={a}, rel_tol={r}")
+        self.abs_tol = abs_tol
+        self.rel_tol = rel_tol
+        self.tolerances: dict[str, tuple[float, float]] = dict(tolerances) if tolerances else {}
+        self._resolved_tolerances: dict[str, tuple[float, float]] = {
+            col: self.tolerances.get(col, (abs_tol, rel_tol)) for col in shared
+        }
+
         self._joined = self._adapter1.full_outer_join(self._adapter2, self.join_columns)
 
         self._row_summary: RowSummary | None = None
@@ -121,7 +147,9 @@ class Compare:
             if not self._compared_columns:
                 self._column_summary = []
             else:
-                counts = self._joined.compare_columns(self._compared_columns)
+                counts = self._joined.compare_columns(
+                    self._compared_columns, self._resolved_tolerances
+                )
                 summaries = [
                     ColumnSummary(
                         column=col,
@@ -153,7 +181,8 @@ class Compare:
     def sample_mismatches(self, column: str, n: int = 5) -> pd.DataFrame:
         if column not in self._compared_columns:
             raise JuxtapyError(f"'{column}' is not a shared, comparable column.")
-        return self._joined.sample_mismatched_rows(column, self.join_columns, n)
+        abs_tol, rel_tol = self._resolved_tolerances[column]
+        return self._joined.sample_mismatched_rows(column, self.join_columns, n, abs_tol, rel_tol)
 
     def matches(self, ignore_extra_columns: bool = False) -> bool:
         rs = self.row_summary()
@@ -230,6 +259,17 @@ class Compare:
                 failures=failures,
             )
 
+    def _tolerance_note(self) -> str | None:
+        if not (self.abs_tol or self.rel_tol or self.tolerances):
+            return None
+        note = f"abs_tol={self.abs_tol}, rel_tol={self.rel_tol}"
+        if self.tolerances:
+            overrides = ", ".join(
+                f"{col}=(abs_tol={a}, rel_tol={r})" for col, (a, r) in self.tolerances.items()
+            )
+            note += f" (overrides: {overrides})"
+        return note
+
     def report(self, top_n_columns: int = 5, sample_rows_per_column: int = 5) -> CompareReport:
         columns = self.column_summary()
         worst = [c for c in columns if c.mismatch_count > 0][:top_n_columns]
@@ -244,6 +284,7 @@ class Compare:
             column_summary=columns,
             schema_diff=self.schema_diff(),
             samples=samples,
+            tolerance_note=self._tolerance_note(),
         )
 
 

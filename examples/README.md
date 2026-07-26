@@ -9,6 +9,7 @@ Each script is self-contained (builds its own sample data — no external files 
 | [`03_ci_threshold_gate.py`](03_ci_threshold_gate.py) | `assert_match` for gating a pipeline/CI job, `matches()` |
 | [`04_pyspark_databricks.py`](04_pyspark_databricks.py) | Same API against PySpark DataFrames (Databricks-ready) |
 | [`05_databricks_full_demo.py`](05_databricks_full_demo.py) | Every public function/class in one notebook — upload directly to Databricks |
+| [`06_numeric_tolerance.py`](06_numeric_tolerance.py) | `abs_tol`/`rel_tol` (global) and `tolerances` (per-column override) for floating-point noise |
 
 Run the pandas-only ones directly:
 
