@@ -202,7 +202,63 @@ report.to_dict()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Composite (multi-column) join keys, `columns_to_compare`, `ignore_columns`
+# MAGIC ## 5. Numeric tolerance — `abs_tol`/`rel_tol`, per-column `tolerances`
+# MAGIC
+# MAGIC By default a "match" requires exact equality, so floating-point noise (a cast, a
+# MAGIC rounding difference) shows up as a false-positive mismatch. `abs_tol`/`rel_tol` let
+# MAGIC numeric columns match within `abs_tol + rel_tol * max(|df1_val|, |df2_val|)` instead —
+# MAGIC symmetric, so swapping df1/df2 gives the same result. `tolerances` overrides the
+# MAGIC global bar for specific columns. Non-numeric columns always require exact equality.
+
+# COMMAND ----------
+
+tol_prod_pdf = pd.DataFrame(
+    {
+        "id": [1, 2, 3, 4],
+        "revenue": [1000.00, 2500.00, 375.50, 9999.99],
+        "price": [19.99, 49.50, 12.00, 100.00],
+    }
+)
+tol_staging_pdf = pd.DataFrame(
+    {
+        "id": [1, 2, 3, 4],
+        # id 1/2/3: ordinary floating-point noise; id 4: a genuinely different value
+        "revenue": [1000.0000004, 2500.01, 375.50, 10500.00],
+        # id 3: a small drift that revenue-level tolerance would hide, but matters a lot
+        # for a per-unit price (it multiplies at scale)
+        "price": [19.99, 49.50, 12.015, 100.00],
+    }
+)
+tol_prod = spark.createDataFrame(tol_prod_pdf)
+tol_staging = spark.createDataFrame(tol_staging_pdf)
+
+cmp_exact = Compare(tol_prod, tol_staging, join_columns="id")
+print("No tolerance (exact equality):")
+for cs in cmp_exact.column_summary():
+    print(f"  {cs.column}: {cs.match_count} match / {cs.mismatch_count} mismatch")
+
+# COMMAND ----------
+
+# DBTITLE 1,abs_tol absorbs noise; tolerances tightens price beyond the global bar
+cmp_tol = Compare(
+    tol_prod,
+    tol_staging,
+    join_columns="id",
+    abs_tol=0.02,
+    tolerances={"price": (0.001, 0.0)},
+)
+for cs in cmp_tol.column_summary():
+    print(f"  {cs.column}: {cs.match_count} match / {cs.mismatch_count} mismatch")
+
+# COMMAND ----------
+
+# DBTITLE 1,report() documents the applied tolerance
+cmp_tol.report()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6. Composite (multi-column) join keys, `columns_to_compare`, `ignore_columns`
 
 # COMMAND ----------
 
@@ -257,7 +313,7 @@ cmp_ignore = Compare(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. `compare()` — functional shortcut
+# MAGIC ## 7. `compare()` — functional shortcut
 # MAGIC
 # MAGIC Equivalent to `Compare(df1, df2, join_columns, **kwargs).report()` in one call.
 
@@ -269,7 +325,7 @@ shortcut_report.row_summary  # noqa: B018 -- bare trailing expression is Databri
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 7. Exceptions
+# MAGIC ## 8. Exceptions
 # MAGIC
 # MAGIC `JoinKeyError` and the base `JuxtapyError` (also raised for e.g. an unknown
 # MAGIC `columns_to_compare` entry, or mixing a pandas and a PySpark DataFrame in one `Compare`).
