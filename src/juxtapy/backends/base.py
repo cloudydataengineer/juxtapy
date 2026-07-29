@@ -36,11 +36,13 @@ class JoinedAdapter(Protocol):
         self,
         columns: Sequence[str],
         tolerances: Mapping[str, tuple[float, float]] | None = None,
-    ) -> dict[str, tuple[int, int]]:
-        """Return {column: (match_count, mismatch_count)} for all given columns in one pass.
+    ) -> dict[str, tuple[int, int, int, int]]:
+        """Return {column: (match_count, mismatch_count, null_count_df1, null_count_df2)}
+        for all given columns in one pass.
 
         ``tolerances`` maps column -> (abs_tol, rel_tol); columns not present use (0.0, 0.0)
-        (exact equality). Tolerance only applies where both sides are numeric.
+        (exact equality). Tolerance only applies where both sides are numeric. Null counts
+        are over the same joined ("both present") rows as match/mismatch.
         """
         ...
 

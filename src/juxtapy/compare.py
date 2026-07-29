@@ -9,7 +9,13 @@ import pandas as pd
 
 from juxtapy.backends.detect import infer_backend, make_adapter
 from juxtapy.exceptions import JoinKeyError, JuxtapyError, MismatchThresholdError
-from juxtapy.results import ColumnSummary, CompareReport, RowSummary, SchemaDiff
+from juxtapy.results import (
+    ColumnSummary,
+    CompareReport,
+    RowSummary,
+    SchemaDiff,
+    ValidationFailure,
+)
 
 
 def _lower_columns(df: Any, backend: str) -> Any:
@@ -157,6 +163,8 @@ class Compare:
                         mismatch_count=counts[col][1],
                         dtype1=self._adapter1.dtype_of(col),
                         dtype2=self._adapter2.dtype_of(col),
+                        null_count_df1=counts[col][2],
+                        null_count_df2=counts[col][3],
                     )
                     for col in self._compared_columns
                 ]
@@ -258,6 +266,117 @@ class Compare:
                 threshold=effective_threshold,
                 failures=failures,
             )
+
+    def validate(
+        self,
+        schema_check: bool = True,
+        row_check: bool = True,
+        column: str | Sequence[str] | None = None,
+        threshold: float | None = None,
+        null_check: bool = True,
+        null_tolerance: float = 0.0,
+    ) -> list[ValidationFailure]:
+        """Run a bundle of data-quality checks and return only the ones that failed.
+
+        Unlike assert_match, this never raises for a failed check — it returns a
+        (possibly empty) list of ValidationFailure, so a pipeline can log/branch on
+        the result directly instead of needing try/except. It still raises JuxtapyError
+        for a genuinely invalid call (e.g. an unknown column name in ``column``).
+
+        - schema_check: flag columns only on one side, or with a changed dtype
+          (schema_diff().has_drift).
+        - row_check: flag duplicate join keys, or rows only on one side (row_summary()).
+        - column / threshold: forwarded to assert_match() for the per-column match-rate
+          check. threshold=None (the default) means auto-threshold across all compared
+          columns, or across ``column`` if given. Pass column=[] to skip this check.
+        - null_check / null_tolerance: flag columns (same scope as ``column``) whose null
+          rate increased from df1 to df2 by more than ``null_tolerance`` percentage
+          points (default 0.0 — any increase at all is flagged). Decreases in null rate
+          are never flagged.
+        """
+        failures: list[ValidationFailure] = []
+
+        if schema_check:
+            sd = self.schema_diff()
+            if sd.only_in_df1:
+                failures.append(
+                    ValidationFailure(
+                        "schema_drift", f"columns only in {self.df1_name}: {sd.only_in_df1}"
+                    )
+                )
+            if sd.only_in_df2:
+                failures.append(
+                    ValidationFailure(
+                        "schema_drift", f"columns only in {self.df2_name}: {sd.only_in_df2}"
+                    )
+                )
+            if sd.dtype_changes:
+                failures.append(
+                    ValidationFailure("schema_drift", f"dtype changed: {sd.dtype_changes}")
+                )
+
+        if row_check:
+            rs = self.row_summary()
+            if rs.duplicate_keys_df1:
+                failures.append(
+                    ValidationFailure(
+                        "duplicate_keys",
+                        f"{rs.duplicate_keys_df1} duplicate join key row(s) in {self.df1_name}",
+                    )
+                )
+            if rs.duplicate_keys_df2:
+                failures.append(
+                    ValidationFailure(
+                        "duplicate_keys",
+                        f"{rs.duplicate_keys_df2} duplicate join key row(s) in {self.df2_name}",
+                    )
+                )
+            if rs.only_in_df1:
+                failures.append(
+                    ValidationFailure(
+                        "rows_only_in_df1", f"{rs.only_in_df1} row(s) only in {self.df1_name}"
+                    )
+                )
+            if rs.only_in_df2:
+                failures.append(
+                    ValidationFailure(
+                        "rows_only_in_df2", f"{rs.only_in_df2} row(s) only in {self.df2_name}"
+                    )
+                )
+
+        try:
+            self.assert_match(threshold=threshold, column=column)
+        except MismatchThresholdError as e:
+            for col, rate in e.failures:
+                label = f"column:{col}" if col is not None else "overall"
+                failures.append(
+                    ValidationFailure(
+                        label, f"match_rate={rate:.4f} below threshold {e.threshold:.4f}"
+                    )
+                )
+
+        if null_check:
+            if column is None:
+                null_columns = list(self._compared_columns)
+            elif isinstance(column, str):
+                null_columns = [column]
+            else:
+                null_columns = list(column)
+            by_name = {cs.column: cs for cs in self.column_summary()}
+            for col in null_columns:
+                cs = by_name.get(col)
+                if cs is None:
+                    continue
+                delta = cs.null_pct_df2 - cs.null_pct_df1
+                if delta > null_tolerance:
+                    failures.append(
+                        ValidationFailure(
+                            f"null_rate:{col}",
+                            f"null% increased from {cs.null_pct_df1:.2f} to {cs.null_pct_df2:.2f}",
+                        )
+                    )
+
+        return failures
 
     def _tolerance_note(self) -> str | None:
         if not (self.abs_tol or self.rel_tol or self.tolerances):

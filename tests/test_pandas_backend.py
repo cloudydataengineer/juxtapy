@@ -29,16 +29,18 @@ def test_compare_columns_exact_counts():
     df2 = pd.DataFrame({"id": [1, 2, 3], "v": [10, 21, 30]})
     joined = PandasAdapter(df1).full_outer_join(PandasAdapter(df2), ["id"])
     counts = joined.compare_columns(["v"])
-    assert counts["v"] == (2, 1)
+    assert counts["v"] == (2, 1, 0, 0)
 
 
 def test_compare_columns_null_safe():
     df1 = pd.DataFrame({"id": [1, 2, 3], "v": [None, 5, None]})
     df2 = pd.DataFrame({"id": [1, 2, 3], "v": [None, 5, 9]})
     joined = PandasAdapter(df1).full_outer_join(PandasAdapter(df2), ["id"])
-    match_count, mismatch_count = joined.compare_columns(["v"])["v"]
+    match_count, mismatch_count, null_count_df1, null_count_df2 = joined.compare_columns(["v"])["v"]
     assert match_count == 2  # both-null and equal-value rows match
     assert mismatch_count == 1
+    assert null_count_df1 == 2  # id 1 and id 3 are null in df1
+    assert null_count_df2 == 1  # id 1 is null in df2
 
 
 def test_sample_mismatched_rows_shape():

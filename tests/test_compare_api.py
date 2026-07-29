@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from juxtapy import Compare, JoinKeyError, JuxtapyError, MismatchThresholdError
+from juxtapy import Compare, JoinKeyError, JuxtapyError, MismatchThresholdError, ValidationFailure
 
 
 def test_perfect_match(backend, make_df):
@@ -43,6 +43,15 @@ def test_null_handling_parity(backend, make_df):
     cmp = Compare(df1, df2, join_columns="id")
     cs = cmp.column_summary()[0]
     assert (cs.match_count, cs.mismatch_count) == (2, 1)
+
+
+def test_column_summary_null_counts(backend, make_df):
+    df1 = make_df([(1, None), (2, 5), (3, None), (4, 7)], ["id", "v"])
+    df2 = make_df([(1, None), (2, 5), (3, 9), (4, None)], ["id", "v"])
+    cmp = Compare(df1, df2, join_columns="id")
+    cs = cmp.column_summary()[0]
+    assert (cs.null_count_df1, cs.null_count_df2) == (2, 2)
+    assert (cs.null_pct_df1, cs.null_pct_df2) == (50.0, 50.0)
 
 
 def test_dtype_mismatch_reported(backend, make_df):
@@ -239,6 +248,93 @@ def test_assert_match_auto_threshold_single_column_always_passes():
     df1, df2 = _pandas_frames_with_rates({"a": 0.5})
     cmp = Compare(df1, df2, join_columns="id")
     cmp.assert_match(threshold=None, column="a")  # pstdev of 1 value is 0 -> never fails
+
+
+def test_validate_returns_list_of_validation_failure(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    failures = cmp.validate()
+    assert isinstance(failures, list)
+    assert all(isinstance(f, ValidationFailure) for f in failures)
+
+
+def test_validate_clean_data_returns_empty_list():
+    df = pd.DataFrame({"id": [1, 2, 3], "amount": [10, 20, 30], "name": ["a", "b", "c"]})
+    cmp = Compare(df, df.copy(), join_columns="id")
+    assert cmp.validate() == []
+
+
+def test_validate_schema_drift_flagged():
+    df1 = pd.DataFrame({"id": [1], "shared_int": [10], "only_in_1": ["x"]})
+    df2 = pd.DataFrame({"id": [1], "shared_int": ["10"]})
+    cmp = Compare(df1, df2, join_columns="id")
+    failures = cmp.validate(row_check=False, null_check=False, column=[])
+    assert {f.check for f in failures} == {"schema_drift"}
+    assert len(failures) == 2  # only_in_df1 + dtype_changes (only_in_df2 is empty)
+
+    assert cmp.validate(schema_check=False, row_check=False, null_check=False, column=[]) == []
+
+
+def test_validate_row_check_flags_duplicates_and_only_in_one_side():
+    df1 = pd.DataFrame({"id": [1, 1, 2], "v": [10, 11, 20]})
+    df2 = pd.DataFrame({"id": [1, 3], "v": [10, 30]})
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.warns(UserWarning, match="Duplicate join keys"):
+        failures = cmp.validate(schema_check=False, null_check=False, column=[])
+    assert {f.check for f in failures} == {"duplicate_keys", "rows_only_in_df1", "rows_only_in_df2"}
+
+
+def test_validate_column_check_reports_failing_columns():
+    rates = {f"good{i}": 1.0 for i in range(9)}
+    rates["bad"] = 0.0
+    df1, df2 = _pandas_frames_with_rates(rates)
+    cmp = Compare(df1, df2, join_columns="id")
+    failures = cmp.validate(schema_check=False, row_check=False, null_check=False, column=list(rates))
+    assert len(failures) == 1
+    assert failures[0].check == "column:bad"
+
+
+def test_validate_unknown_column_raises(df_pair):
+    df1, df2 = df_pair
+    cmp = Compare(df1, df2, join_columns="id")
+    with pytest.raises(JuxtapyError):
+        cmp.validate(column=["nope"])
+
+
+def test_validate_null_check_flags_increase():
+    df1 = pd.DataFrame({"id": [1, 2, 3, 4], "v": [1, 2, 3, 4]})
+    df2 = pd.DataFrame({"id": [1, 2, 3, 4], "v": [1, 2, None, None]})
+    cmp = Compare(df1, df2, join_columns="id")
+    # threshold=0.0 neutralizes the column match-rate check so only null_check is observed
+    failures = cmp.validate(schema_check=False, row_check=False, threshold=0.0)
+    assert "null_rate:v" in {f.check for f in failures}
+
+
+def test_validate_null_check_does_not_flag_decrease():
+    df1 = pd.DataFrame({"id": [1, 2, 3, 4], "v": [1, 2, None, None]})
+    df2 = pd.DataFrame({"id": [1, 2, 3, 4], "v": [1, 2, 3, 4]})
+    cmp = Compare(df1, df2, join_columns="id")
+    failures = cmp.validate(schema_check=False, row_check=False, threshold=0.0)
+    assert "null_rate:v" not in {f.check for f in failures}
+
+
+def test_validate_null_check_respects_tolerance():
+    df1 = pd.DataFrame({"id": range(10), "v": [1] * 10})
+    df2 = pd.DataFrame({"id": range(10), "v": [1] * 9 + [None]})
+    cmp = Compare(df1, df2, join_columns="id")
+    failures = cmp.validate(schema_check=False, row_check=False, threshold=0.0)
+    assert "null_rate:v" in {f.check for f in failures}  # null% 0 -> 10, default tolerance 0.0
+
+    lenient = cmp.validate(schema_check=False, row_check=False, threshold=0.0, null_tolerance=15.0)
+    assert "null_rate:v" not in {f.check for f in lenient}
+
+
+def test_validate_null_check_disabled():
+    df1 = pd.DataFrame({"id": [1, 2, 3, 4], "v": [1, 2, 3, 4]})
+    df2 = pd.DataFrame({"id": [1, 2, 3, 4], "v": [1, 2, None, None]})
+    cmp = Compare(df1, df2, join_columns="id")
+    failures = cmp.validate(schema_check=False, row_check=False, threshold=0.0, null_check=False)
+    assert not any(f.check.startswith("null_rate") for f in failures)
 
 
 def test_report_end_to_end(df_pair):

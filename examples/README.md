@@ -10,6 +10,7 @@ Each script is self-contained (builds its own sample data — no external files 
 | [`04_pyspark_databricks.py`](04_pyspark_databricks.py) | Same API against PySpark DataFrames (Databricks-ready) |
 | [`05_databricks_full_demo.py`](05_databricks_full_demo.py) | Every public function/class in one notebook — upload directly to Databricks |
 | [`06_numeric_tolerance.py`](06_numeric_tolerance.py) | `abs_tol`/`rel_tol` (global) and `tolerances` (per-column override) for floating-point noise |
+| [`07_pipeline_validate.py`](07_pipeline_validate.py) | `validate()` — a one-call pipeline gate that returns only the failing checks |
 
 Run the pandas-only ones directly:
 

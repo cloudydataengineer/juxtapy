@@ -95,17 +95,20 @@ class PandasJoinedAdapter:
         self,
         columns: Sequence[str],
         tolerances: Mapping[str, tuple[float, float]] | None = None,
-    ) -> dict[str, tuple[int, int]]:
+    ) -> dict[str, tuple[int, int, int, int]]:
         tolerances = tolerances or {}
         both = self._both_rows()
-        results: dict[str, tuple[int, int]] = {}
+        results: dict[str, tuple[int, int, int, int]] = {}
         for column in columns:
             left, right = self._column_pair(column)
+            left_values, right_values = both[left], both[right]
             abs_tol, rel_tol = tolerances.get(column, (0.0, 0.0))
-            match = _match_mask(both[left], both[right], abs_tol, rel_tol)
+            match = _match_mask(left_values, right_values, abs_tol, rel_tol)
             match_count = int(match.sum())
             mismatch_count = int((~match).sum())
-            results[column] = (match_count, mismatch_count)
+            null_count_df1 = int(left_values.isna().sum())
+            null_count_df2 = int(right_values.isna().sum())
+            results[column] = (match_count, mismatch_count, null_count_df1, null_count_df2)
         return results
 
     def sample_mismatched_rows(

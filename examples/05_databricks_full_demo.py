@@ -258,7 +258,56 @@ cmp_tol.report()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Composite (multi-column) join keys, `columns_to_compare`, `ignore_columns`
+# MAGIC ## 6. Null counts + `validate()` — a one-call pipeline gate
+# MAGIC
+# MAGIC `column_summary()` entries include `null_count_df1`/`null_count_df2` (and
+# MAGIC `null_pct_df1`/`null_pct_df2`). `validate()` bundles schema drift, row-count
+# MAGIC issues, the column match-rate check, and a null-rate regression check into one
+# MAGIC call — unlike `assert_match`, it never raises; it just returns the (possibly
+# MAGIC empty) list of what failed, so a pipeline can log/branch on it directly.
+
+# COMMAND ----------
+
+val_prod_pdf = pd.DataFrame(
+    {
+        "id": [1, 2, 3, 4, 5],
+        "amount": [10, 20, 30, 40, 50],
+        "region": ["us", "us", "eu", "eu", "eu"],
+        "notes": [None, "ok", None, "ok", "ok"],
+    }
+)
+val_staging_pdf = pd.DataFrame(
+    {
+        "id": [1, 2, 3, 4, 6],  # id 5 only in prod, id 6 only in staging
+        "amount": [10, 20, 30, 999, 50],  # id 4's amount broke
+        "region": ["us", "us", "eu", "eu", "eu"],
+        "notes": [None, None, None, "ok", "ok"],  # notes got MORE null on staging
+    }
+)
+val_prod = spark.createDataFrame(val_prod_pdf)
+val_staging = spark.createDataFrame(val_staging_pdf)
+
+val_cmp = Compare(val_prod, val_staging, join_columns="id", df1_name="prod", df2_name="staging")
+for cs in val_cmp.column_summary():
+    print(f"  {cs.column}: null% {cs.null_pct_df1:.1f} -> {cs.null_pct_df2:.1f}")
+
+# COMMAND ----------
+
+# DBTITLE 1,validate() returns only the failing checks
+failures = val_cmp.validate(threshold=0.9, column=["amount", "region", "notes"])
+for f in failures:
+    print(f"  [{f.check}] {f.detail}")
+
+# COMMAND ----------
+
+# DBTITLE 1,scoping and tuning: skip schema/row checks, allow a bigger null swing
+lenient = val_cmp.validate(schema_check=False, row_check=False, column=[], null_tolerance=50.0)
+lenient  # noqa: B018 -- bare trailing expression is Databricks/Jupyter's auto-render idiom
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 7. Composite (multi-column) join keys, `columns_to_compare`, `ignore_columns`
 
 # COMMAND ----------
 
@@ -313,7 +362,7 @@ cmp_ignore = Compare(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 7. `compare()` — functional shortcut
+# MAGIC ## 8. `compare()` — functional shortcut
 # MAGIC
 # MAGIC Equivalent to `Compare(df1, df2, join_columns, **kwargs).report()` in one call.
 
@@ -325,7 +374,7 @@ shortcut_report.row_summary  # noqa: B018 -- bare trailing expression is Databri
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 8. Exceptions
+# MAGIC ## 9. Exceptions
 # MAGIC
 # MAGIC `JoinKeyError` and the base `JuxtapyError` (also raised for e.g. an unknown
 # MAGIC `columns_to_compare` entry, or mixing a pandas and a PySpark DataFrame in one `Compare`).

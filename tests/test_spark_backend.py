@@ -37,7 +37,7 @@ def test_compare_columns_exact_counts(spark_session):
     df2 = spark_session.createDataFrame([(1, 10), (2, 21), (3, 30)], ["id", "v"])
     joined = SparkAdapter(df1).full_outer_join(SparkAdapter(df2), ["id"])
     counts = joined.compare_columns(["v"])
-    assert counts["v"] == (2, 1)
+    assert counts["v"] == (2, 1, 0, 0)
 
 
 def test_compare_columns_null_safe(spark_session):
@@ -46,9 +46,11 @@ def test_compare_columns_null_safe(spark_session):
     df1 = spark_session.createDataFrame([(1, None), (2, 5), (3, None)], ["id", "v"])
     df2 = spark_session.createDataFrame([(1, None), (2, 5), (3, 9)], ["id", "v"])
     joined = SparkAdapter(df1).full_outer_join(SparkAdapter(df2), ["id"])
-    match_count, mismatch_count = joined.compare_columns(["v"])["v"]
+    match_count, mismatch_count, null_count_df1, null_count_df2 = joined.compare_columns(["v"])["v"]
     assert match_count == 2
     assert mismatch_count == 1
+    assert null_count_df1 == 2  # id 1 and id 3 are null in df1
+    assert null_count_df2 == 1  # id 1 is null in df2
 
 
 def test_sample_mismatched_rows_shape(spark_session):

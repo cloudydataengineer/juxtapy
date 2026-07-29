@@ -116,7 +116,7 @@ class SparkJoinedAdapter:
         self,
         columns: Sequence[str],
         tolerances: Mapping[str, tuple[float, float]] | None = None,
-    ) -> dict[str, tuple[int, int]]:
+    ) -> dict[str, tuple[int, int, int, int]]:
         columns = list(columns)
         if not columns:
             return {}
@@ -125,16 +125,23 @@ class SparkJoinedAdapter:
         agg_exprs = [F.count(F.lit(1)).alias("__total")]
         for column in columns:
             abs_tol, rel_tol = tolerances.get(column, (0.0, 0.0))
-            match_expr = self._match_expr(
-                f"{column}{_LEFT_SUFFIX}", f"{column}{_RIGHT_SUFFIX}", abs_tol, rel_tol
-            )
+            left_name, right_name = f"{column}{_LEFT_SUFFIX}", f"{column}{_RIGHT_SUFFIX}"
+            match_expr = self._match_expr(left_name, right_name, abs_tol, rel_tol)
             agg_exprs.append(F.sum(match_expr.cast("long")).alias(f"__match__{column}"))
+            agg_exprs.append(
+                F.sum(F.col(left_name).isNull().cast("long")).alias(f"__null1__{column}")
+            )
+            agg_exprs.append(
+                F.sum(F.col(right_name).isNull().cast("long")).alias(f"__null2__{column}")
+            )
         row = both.agg(*agg_exprs).collect()[0]
         total = row["__total"] or 0
-        results: dict[str, tuple[int, int]] = {}
+        results: dict[str, tuple[int, int, int, int]] = {}
         for column in columns:
             match_count = int(row[f"__match__{column}"] or 0)
-            results[column] = (match_count, total - match_count)
+            null1 = int(row[f"__null1__{column}"] or 0)
+            null2 = int(row[f"__null2__{column}"] or 0)
+            results[column] = (match_count, total - match_count, null1, null2)
         return results
 
     def sample_mismatched_rows(

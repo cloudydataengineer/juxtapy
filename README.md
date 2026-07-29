@@ -65,6 +65,7 @@ Runnable, self-contained scripts live in [`examples/`](examples/):
 - [`04_pyspark_databricks.py`](examples/04_pyspark_databricks.py) — the same API against PySpark DataFrames
 - [`05_databricks_full_demo.py`](examples/05_databricks_full_demo.py) — every public function/class in one notebook, importable directly into Databricks
 - [`06_numeric_tolerance.py`](examples/06_numeric_tolerance.py) — `abs_tol`/`rel_tol` and per-column `tolerances` for floating-point noise
+- [`07_pipeline_validate.py`](examples/07_pipeline_validate.py) — `validate()`, a one-call pipeline gate that returns only the failing checks
 
 ## API Reference
 
@@ -89,6 +90,7 @@ Joins `df1` and `df2` on `join_columns` and prepares the comparison. Both datafr
 | `sample_mismatches(column, n=5)` | `pandas.DataFrame` | Join key(s) + both values, for up to `n` of the actual mismatched rows for `column`. Always a pandas DataFrame, even for PySpark inputs. Raises `JuxtapyError` if `column` wasn't compared. |
 | `matches(ignore_extra_columns=False)` | `bool` | `True` if every compared column fully agrees (and, unless `ignore_extra_columns=True`, rows match on both sides too). |
 | `assert_match(threshold=1.0, column=None)` | `None` | Raises `MismatchThresholdError` if a match rate falls below `threshold`. `column` may be a single column name, a **list** of column names, or `None` (overall/all-columns). With a list, every named column is checked and *all* failing columns are reported in one error, not just the first. Pass `threshold=None` explicitly to auto-derive the bar instead, as `mean(rates) - 2 * pstdev(rates)` across the checked columns — flags columns whose match rate is a statistical outlier relative to the others being checked (with a single checked column, this always passes, since stdev of one value is 0). Designed for CI gating. |
+| `validate(schema_check=True, row_check=True, column=None, threshold=None, null_check=True, null_tolerance=0.0)` | `list[ValidationFailure]` | Runs a bundle of checks and returns **only the ones that failed** (empty list when everything's fine) — never raises for a failed check, so a pipeline can branch/log on the result directly. Bundles: schema drift (`schema_check`), duplicate keys / rows only on one side (`row_check`), the same per-column match-rate check as `assert_match` (`column`/`threshold`, auto-threshold by default — pass `column=[]` to skip it), and a null-rate regression check (`null_check`) that flags a column whose null rate *increased* from df1 to df2 by more than `null_tolerance` percentage points (decreases are never flagged). Still raises `JuxtapyError` for an invalid call, e.g. an unknown column name. |
 | `report(top_n_columns=5, sample_rows_per_column=5)` | `CompareReport` | Everything above bundled into one object — the worst `top_n_columns` mismatched columns each get up to `sample_rows_per_column` sample rows. |
 
 ### `compare(df1, df2, join_columns, **kwargs)`
@@ -98,8 +100,9 @@ Functional shortcut: `Compare(df1, df2, join_columns, **kwargs).report()`.
 ### Result types (`juxtapy.results`)
 
 - **`RowSummary`** — `rows_df1`, `rows_df2`, `common_rows`, `only_in_df1`, `only_in_df2`, `duplicate_keys_df1`, `duplicate_keys_df2`, plus `.all_rows_match` (bool property).
-- **`ColumnSummary`** — `column`, `match_count`, `mismatch_count`, `dtype1`, `dtype2`, plus `.total_compared`, `.match_pct`, `.mismatch_pct` (properties).
+- **`ColumnSummary`** — `column`, `match_count`, `mismatch_count`, `dtype1`, `dtype2`, `null_count_df1`, `null_count_df2`, plus `.total_compared`, `.match_pct`, `.mismatch_pct`, `.null_pct_df1`, `.null_pct_df2` (properties). Null counts/percentages are over the same joined ("both present") rows as match/mismatch.
 - **`SchemaDiff`** — `only_in_df1`, `only_in_df2`, `dtype_changes` (`{column: (dtype1, dtype2)}`), plus `.has_drift` (bool property).
+- **`ValidationFailure`** — `check` (a short label, e.g. `"column:amount"`, `"schema_drift"`, `"null_rate:qty"`) and `detail` (human-readable message). Returned in a list by `Compare.validate()`.
 - **`CompareReport`** — `df1_name`, `df2_name`, `join_columns`, `row_summary`, `column_summary`, `schema_diff`, `samples` (`{column: DataFrame}`), `tolerance_note` (a human-readable summary of `abs_tol`/`rel_tol`/`tolerances`, or `None` if none were set). `str(report)` renders a plain-text report; `report.to_html()` / `report._repr_html_()` render an HTML table (auto-used by Jupyter/Databricks); `report.to_dict()` returns a plain dict (samples excluded) for logging/JSON.
 
 ### Exceptions (`juxtapy.exceptions`)

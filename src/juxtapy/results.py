@@ -27,6 +27,8 @@ class ColumnSummary:
     mismatch_count: int
     dtype1: str
     dtype2: str
+    null_count_df1: int
+    null_count_df2: int
 
     @property
     def total_compared(self) -> int:
@@ -41,6 +43,26 @@ class ColumnSummary:
     @property
     def mismatch_pct(self) -> float:
         return 100.0 - self.match_pct
+
+    @property
+    def null_pct_df1(self) -> float:
+        if self.total_compared == 0:
+            return 0.0
+        return 100.0 * self.null_count_df1 / self.total_compared
+
+    @property
+    def null_pct_df2(self) -> float:
+        if self.total_compared == 0:
+            return 0.0
+        return 100.0 * self.null_count_df2 / self.total_compared
+
+
+@dataclass
+class ValidationFailure:
+    """One failed check from Compare.validate() — e.g. ("column:amount", "match_rate=... ")."""
+
+    check: str
+    detail: str
 
 
 @dataclass

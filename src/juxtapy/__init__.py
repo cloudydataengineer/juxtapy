@@ -5,7 +5,13 @@ from juxtapy.exceptions import (
     MismatchThresholdError,
     SchemaError,
 )
-from juxtapy.results import ColumnSummary, CompareReport, RowSummary, SchemaDiff
+from juxtapy.results import (
+    ColumnSummary,
+    CompareReport,
+    RowSummary,
+    SchemaDiff,
+    ValidationFailure,
+)
 
 __version__ = "0.3.0"
 
@@ -19,5 +25,6 @@ __all__ = [
     "RowSummary",
     "SchemaDiff",
     "SchemaError",
+    "ValidationFailure",
     "compare",
 ]
